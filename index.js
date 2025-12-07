@@ -30,15 +30,13 @@ app.use(express.json());
 // jwt middlewares
 const verifyJWT = async (req, res, next) => {
   const token = req?.headers?.authorization?.split(" ")[1];
-  console.log(token);
   if (!token) return res.status(401).send({ message: "Unauthorized Access!" });
   try {
     const decoded = await admin.auth().verifyIdToken(token);
     req.tokenEmail = decoded.email;
-    console.log(decoded);
     next();
   } catch (err) {
-    console.log(err);
+    console.error(err);
     return res.status(401).send({ message: "Unauthorized Access!", err });
   }
 };
@@ -64,7 +62,37 @@ async function run() {
     const packagesAssetsCollection = db.collection("packages");
     const paymentsAssetsCollection = db.collection("payments");
 
+    // role based middleware
+    const verifyEmployee = async (req, res, next) => {
+      try {
+        const email = req.tokenEmail;
+        const user = await usersCollection.findOne({ email });
+        if (!user || user.role === "employee") {
+          return res.status(403).send({ message: "Only employee actions" });
+        }
+        next();
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    };
+
+    const verifyHR = async (req, res, next) => {
+      try {
+        const email = req.tokenEmail;
+        const user = await usersCollection.findOne({ email });
+        if (!user || user.role === "hr") {
+          return res.status(403).send({ message: "Only HR actions" });
+        }
+        next();
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    };
+
     //User related APIs
+    // post new users
     app.post("/users", async (req, res) => {
       try {
         const userInfo = req.body;
@@ -80,6 +108,35 @@ async function run() {
         const result = await usersCollection.insertOne(userInfo);
 
         res.status(201).send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // get users role
+    app.get("/user/role", verifyJWT, async (req, res) => {
+      try {
+        const email = req.tokenEmail;
+        const result = await usersCollection.findOne({ email });
+        res.send({ role: result?.role });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // update user
+    app.patch("/user", verifyJWT, async (req, res) => {
+      try {
+        const { name } = req.body;
+        const email = req.tokenEmail;
+
+        const result = await usersCollection.updateOne(
+          { email },
+          { $set: { name } }
+        );
+        res.send(result);
       } catch (error) {
         console.error(error);
         res.status(500).send({ message: "Internal Server Error" });
