@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const admin = require("firebase-admin");
 const port = process.env.PORT || 3000;
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
@@ -59,7 +59,7 @@ async function run() {
     const assetsCollection = db.collection("assets");
     const requestsCollection = db.collection("requests");
     const assignedAssetsCollection = db.collection("assignedAssets");
-    const packagesAssetsCollection = db.collection("packages");
+    const packagesCollection = db.collection("packages");
     const paymentsAssetsCollection = db.collection("payments");
 
     // role based middleware
@@ -136,6 +136,86 @@ async function run() {
           { email },
           { $set: { name } }
         );
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // Package related APIs
+
+    // Get all packages
+    app.get("/packages", async (req, res) => {
+      try {
+        const result = await packagesCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // Asset Related APIs
+
+    // Get all assets
+    app.get("/assets", async (req, res) => {
+      try {
+        const result = await assetsCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // Edit asset
+    app.patch("/assets/:id", async (req, res) => {
+      try {
+        const updateData = req.body;
+        const { id } = req.params;
+        const query = { _id: new ObjectId(id) };
+
+        const update = {
+          $set: updateData,
+        };
+
+        const result = await assetsCollection.updateOne(query, update);
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ message: "Asset Not Found" });
+        }
+
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // Post asset
+    app.post("/assets", async (req, res) => {
+      try {
+        const assetData = req.body;
+        const result = await assetsCollection.insertOne(assetData);
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // Delete asset
+    app.delete("/asset/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const query = { _id: new ObjectId(id) };
+        const result = await assetsCollection.deleteOne(query);
+
+        if (result.deletedCount === 0) {
+          return res.status(404).send({ message: "Asset Not Found" });
+        }
+
         res.send(result);
       } catch (error) {
         console.error(error);
