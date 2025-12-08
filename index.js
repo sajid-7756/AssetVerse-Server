@@ -223,6 +223,43 @@ async function run() {
       }
     });
 
+    // Request Related APIs
+
+    // Post asset request
+    app.post("/asset-requests", async (req, res) => {
+      try {
+        const requestData = req.body;
+        requestData.requestDate = new Date().toISOString();
+        requestData.approvalDate = null;
+        requestData.requestStatus = "pending";
+
+        const result = await requestsCollection.insertOne(requestData);
+        res.status(201).send(result);
+      } catch (error) {
+        console.error(error);
+        req.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // Get asset requests
+    app.get("/asset-requests/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+
+        const query = {};
+
+        if (email) {
+          query.hrEmail = email;
+        }
+
+        const result = await requestsCollection.find(query).toArray();
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
