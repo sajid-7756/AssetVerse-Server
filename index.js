@@ -1,7 +1,12 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const {
+  MongoClient,
+  ServerApiVersion,
+  ObjectId,
+  AuthMechanism,
+} = require("mongodb");
 const admin = require("firebase-admin");
 const port = process.env.PORT || 3000;
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
@@ -170,6 +175,24 @@ async function run() {
       }
     });
 
+    // Get a employees assets
+    app.get("/my-assets/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+
+        const query = {};
+        if (email) {
+          query.employeeEmail = email;
+        }
+
+        const result = await assignedAssetsCollection.find(query).toArray();
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
     // Edit asset
     app.patch("/assets/:id", async (req, res) => {
       try {
@@ -234,6 +257,15 @@ async function run() {
         requestData.approvalDate = null;
         requestData.requestStatus = "pending";
 
+        const existingRequest = await requestsCollection.findOne({
+          assetId: requestData.assetId,
+          requesterEmail: requestData.requesterEmail,
+        });
+
+        if (existingRequest) {
+          return res.status(409).send({ message: "Already Requested" });
+        }
+
         const result = await requestsCollection.insertOne(requestData);
         res.status(201).send(result);
       } catch (error) {
@@ -283,9 +315,9 @@ async function run() {
           $set: { availableQuantity: latestQuantity },
         };
 
-        const request = await requestsCollection.findOne({ assetId });
+        const request = await requestsCollection.findOne(query);
 
-        const employeeAssetListData = {
+        const assignedAssetListData = {
           assetId: asset?._id.toString(),
           assetName: asset?.productName,
           assetImage: asset?.productImage,
@@ -299,27 +331,54 @@ async function run() {
           status: "assigned",
         };
 
+        const hr = await usersCollection.findOne({ email: request?.hrEmail });
+
+        const employeeAffiliationsListData = {
+          employeeName: request?.requesterName,
+          employeeEmail: request?.requesterEmail,
+          companyName: request?.companyName,
+          companyLogo: hr?.companyLogo,
+          hrEmail: request?.hrEmail,
+          affiliationDate: new Date().toISOString(),
+          status: "active",
+        };
+
         if (!request) {
           return res.status(404).send({ message: "Request Not Found" });
         }
         if (request.requestStatus === "approved") {
           return res.status(409).send({ message: "Request Already Approved" });
         }
-        const existingEmployeeAffliction =
-          await employeeAffiliationsCollection.findOne({
+
+        const existingAssignedAssetCollection =
+          await assignedAssetsCollection.findOne({
             assetId: asset?._id.toString(),
             employeeEmail: request?.requesterEmail,
             status: "assigned",
           });
 
-        if (existingEmployeeAffliction) {
+        if (existingAssignedAssetCollection) {
           return res.status(409).send({ message: "Already Assigned" });
         }
 
         await assetsCollection.updateOne(assetQuery, assetUpdate);
-        await employeeAffiliationsCollection.insertOne(employeeAssetListData);
+        await assignedAssetsCollection.insertOne(assignedAssetListData);
         const result = await requestsCollection.updateOne(query, update);
+
         res.send(result);
+
+        const existingEmployeeAffiliation =
+          await employeeAffiliationsCollection.findOne({
+            employeeEmail: request?.requesterEmail,
+          });
+
+        if (existingEmployeeAffiliation) {
+          return;
+        }
+
+        await employeeAffiliationsCollection.insertOne(
+          employeeAffiliationsListData
+        );
       } catch (error) {
         res.status(500).send({ message: "Internal Server Error" });
       }
@@ -349,6 +408,55 @@ async function run() {
         }
 
         const result = await requestsCollection.updateOne(query, update);
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // Employee Related Data
+    app.get("/my-employees/:email", async (req, res) => {
+      try {
+        const { email: hrEmail } = req.params;
+
+        // 1 Get all asset assignments for this HR
+        const assignedAssets = await assignedAssetsCollection
+          .find({ hrEmail })
+          .toArray();
+
+        // console.log(assignedAssets)
+
+        // 2 Get unique employee emails
+        const employeeEmails = [
+          ...new Set(assignedAssets.map((e) => e.employeeEmail)),
+        ];
+
+        if (employeeEmails.length === 0) {
+          return res.send([]);
+        }
+
+        // 3 Get employee details from usersCollection
+        const employees = await usersCollection
+          .find({
+            email: { $in: employeeEmails },
+          })
+          .toArray();
+
+        // 4 Count assets for each employee
+        const result = employees.map((emp) => {
+          const assetCount = assignedAssets.filter(
+            (a) => a.employeeEmail === emp.email
+          ).length;
+
+          return {
+            name: emp.name,
+            email: emp.email,
+            image: emp.profileImage,
+            assetCount,
+          };
+        });
+
         res.send(result);
       } catch (error) {
         console.error(error);
