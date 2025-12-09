@@ -370,10 +370,13 @@ async function run() {
         const existingEmployeeAffiliation =
           await employeeAffiliationsCollection.findOne({
             employeeEmail: request?.requesterEmail,
+            hrEmail: request?.hrEmail,
           });
 
         if (existingEmployeeAffiliation) {
-          return;
+          return res
+            .status(409)
+            .send({ message: "Already Assigned by This HR" });
         }
 
         await employeeAffiliationsCollection.insertOne(
@@ -416,20 +419,24 @@ async function run() {
     });
 
     // Employee Related Data
+
+    // Get a HRs employee
     app.get("/my-employees/:email", async (req, res) => {
       try {
         const { email: hrEmail } = req.params;
 
         // 1 Get all asset assignments for this HR
+        const employeeAffiliations = await employeeAffiliationsCollection
+          .find({ hrEmail })
+          .toArray();
+
         const assignedAssets = await assignedAssetsCollection
           .find({ hrEmail })
           .toArray();
 
-        // console.log(assignedAssets)
-
         // 2 Get unique employee emails
         const employeeEmails = [
-          ...new Set(assignedAssets.map((e) => e.employeeEmail)),
+          ...new Set(employeeAffiliations.map((e) => e.employeeEmail)),
         ];
 
         if (employeeEmails.length === 0) {
@@ -457,6 +464,67 @@ async function run() {
           };
         });
 
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // Delete an employee
+    app.delete("/my-employees/:email", async (req, res) => {
+      try {
+        const { email: employeeEmail } = req.params;
+        const result = await employeeAffiliationsCollection.deleteOne({
+          employeeEmail,
+        });
+
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // Get an employees team
+    app.get("/my-team/:companyName", async (req, res) => {
+      try {
+        const { companyName } = req.params;
+
+        //1 Get employeeAffiliations by company Name
+        const employeeAffiliations = await employeeAffiliationsCollection
+          .find({ companyName })
+          .toArray();
+
+        // 2 Get the employees email
+        const employeeEmails = [
+          ...new Set(employeeAffiliations.map((e) => e.employeeEmail)),
+        ];
+
+        if (employeeEmails.length === 0) {
+          return res.send([]);
+        }
+
+        // 3 Get HRs email
+        const { hrEmail } = await employeeAffiliationsCollection.findOne({
+          companyName,
+        });
+
+        const memberQuery = {
+          $or: [{ email: { $in: employeeEmails } }, { email: hrEmail }],
+        };
+
+        // 4 Get members data from usersCollection
+        const members = await usersCollection.find(memberQuery).toArray();
+
+        const result = members.map((e) => {
+          return {
+            name: e.name,
+            email: e.email,
+            photo: e.profileImage,
+            position: e.role,
+          };
+        });
         res.send(result);
       } catch (error) {
         console.error(error);
