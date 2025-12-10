@@ -175,6 +175,18 @@ async function run() {
       }
     });
 
+    //get all assets of a company
+    app.get("/company-assets/:email", async (req, res) => {
+      try {
+        const { email: hrEmail } = req.params;
+        const result = await assetsCollection.find({ hrEmail }).toArray();
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: " Internal Server Error" });
+      }
+    });
+
     // Get a employees assets
     app.get("/my-assets/:email", async (req, res) => {
       try {
@@ -248,6 +260,18 @@ async function run() {
     });
 
     // Request Related APIs
+
+    // Post assigned asset (direct assignment from HR)
+    app.post("/assigned-assets", async (req, res) => {
+      try {
+        const assignmentData = req.body;
+        const result = await assignedAssetsCollection.insertOne(assignmentData);
+        res.status(201).send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
 
     // Post asset request
     app.post("/asset-requests", async (req, res) => {
@@ -549,6 +573,7 @@ async function run() {
             companyName: company.companyName,
           };
         });
+
         res.send(result);
       } catch (error) {
         console.error(error);
