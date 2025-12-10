@@ -486,7 +486,7 @@ async function run() {
       }
     });
 
-    // Get an employees team
+    // Get members of a company
     app.get("/my-team/:companyName", async (req, res) => {
       try {
         const { companyName } = req.params;
@@ -506,9 +506,11 @@ async function run() {
         }
 
         // 3 Get HRs email
-        const { hrEmail } = await employeeAffiliationsCollection.findOne({
+        const hrRecord = await employeeAffiliationsCollection.findOne({
           companyName,
         });
+
+        const hrEmail = hrRecord?.hrEmail;
 
         const memberQuery = {
           $or: [{ email: { $in: employeeEmails } }, { email: hrEmail }],
@@ -523,6 +525,28 @@ async function run() {
             email: e.email,
             photo: e.profileImage,
             position: e.role,
+            upcomingBirthday: e.dateOfBirth,
+          };
+        });
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // Get a members companies
+    app.get("/my-companies/:email", async (req, res) => {
+      try {
+        const { email: employeeEmail } = req.params;
+
+        const myCompanies = await employeeAffiliationsCollection
+          .find({ employeeEmail })
+          .toArray();
+
+        const result = myCompanies.map((company) => {
+          return {
+            companyName: company.companyName,
           };
         });
         res.send(result);
