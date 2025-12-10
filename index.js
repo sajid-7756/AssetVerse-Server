@@ -1,12 +1,8 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const {
-  MongoClient,
-  ServerApiVersion,
-  ObjectId,
-  AuthMechanism,
-} = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const admin = require("firebase-admin");
 const port = process.env.PORT || 3000;
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
@@ -22,6 +18,7 @@ const app = express();
 app.use(
   cors({
     origin: [
+      process.env.CLIENT_DOMAIN || "http://localhost:5173",
       "http://localhost:5173",
       "http://localhost:5174",
       "https://b12-m11-session.web.app",
@@ -66,7 +63,7 @@ async function run() {
     const requestsCollection = db.collection("requests");
     const assignedAssetsCollection = db.collection("assignedAssets");
     const packagesCollection = db.collection("packages");
-    const paymentsAssetsCollection = db.collection("payments");
+    const paymentsCollection = db.collection("payments");
 
     // role based middleware
     const verifyEmployee = async (req, res, next) => {
@@ -162,6 +159,102 @@ async function run() {
       }
     });
 
+    // Payment Endpoints
+
+    app.post("/create-checkout-session", async (req, res) => {
+      // try {
+      const paymentInfo = req.body;
+      console.log(paymentInfo);
+      const session = await stripe.checkout.sessions.create({
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              product_data: {
+                name: paymentInfo?.name,
+              },
+              unit_amount: paymentInfo?.price * 100,
+            },
+            quantity: 1,
+          },
+        ],
+        customer_email: paymentInfo?.customer?.email,
+        mode: "payment",
+        metadata: {
+          packageId: paymentInfo?.packageId,
+          customer: paymentInfo?.customer?.name,
+          employeeLimit: paymentInfo?.employeeLimit,
+        },
+        success_url: `${process.env.CLIENT_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.CLIENT_DOMAIN}/dashboard/upgrade-package`,
+      });
+
+      res.send({ url: session.url });
+      // } catch (error) {
+      //   console.error(error);
+      //   res.status(500).send({ message: "Internal Server Error" });
+      // }
+    });
+
+    app.post("/payment-success", async (req, res) => {
+      try {
+        const { sessionId } = req.body;
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+        const hrQuery = { email: session?.customer_email };
+        const hr = await usersCollection.findOne(hrQuery);
+
+        const packageData = await packagesCollection.findOne({
+          _id: new ObjectId(session.metadata.packageId),
+        });
+
+        const existingPayment = await paymentsCollection.findOne({
+          transitionId: session.payment_intent,
+        });
+
+        if (session.payment_status === "paid" && packageData) {
+          const orderInfo = {
+            hrEmail: session.customer_email,
+            packageName: packageData?.name,
+            transitionId: session.payment_intent,
+            amount: session.amount_total / 100,
+            employeeLimit: Number(session.metadata.employeeLimit),
+            paymentDate: new Date().toISOString(),
+            status: "completed",
+          };
+
+          if (existingPayment) {
+            return res.send({
+              transitionId: session.payment_intent,
+              message: "Payment already recorded",
+            });
+          }
+
+          const result = await paymentsCollection.insertOne(orderInfo);
+
+          const increaseLimit =
+            hr.packageLimit + Number(session.metadata.employeeLimit);
+
+          const hrUpdate = {
+            $set: { packageLimit: increaseLimit },
+          };
+
+          // Increase Package Limit of HR
+          await usersCollection.updateOne(hrQuery, hrUpdate);
+          return res.send({
+            transitionId: session.payment_intent,
+            orderId: result.insertedId,
+          });
+        }
+        return res.send({
+          transitionId: session.payment_intent,
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
     // Asset Related APIs
 
     // Get all assets
@@ -216,6 +309,40 @@ async function run() {
           $set: updateData,
         };
 
+        const asset = await assetsCollection.findOne({ _id: new ObjectId(id) });
+        console.log(asset);
+
+        const result = await assetsCollection.updateOne(query, update);
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ message: "Asset Not Found" });
+        }
+
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // assign asset
+    app.patch("/assign-asset/:id", async (req, res) => {
+      try {
+        const updateData = req.body;
+        const { id } = req.params;
+        const query = { _id: new ObjectId(id) };
+
+        const update = {
+          $set: updateData,
+        };
+
+        const asset = await assetsCollection.findOne({ _id: new ObjectId(id) });
+        console.log(asset);
+
+        if (asset.availableQuantity === 0) {
+          return res.status(404).send({ message: "Asset Not Available" });
+        }
+
         const result = await assetsCollection.updateOne(query, update);
 
         if (result.matchedCount === 0) {
@@ -265,7 +392,68 @@ async function run() {
     app.post("/assigned-assets", async (req, res) => {
       try {
         const assignmentData = req.body;
+        const employeeEmail = assignmentData.employeeEmail;
+        const assetId = assignmentData.assetId;
+        const hrEmail = assignmentData.hrEmail;
+
+        const existingAssets = await assignedAssetsCollection.findOne({
+          employeeEmail,
+          assetId,
+        });
+
+        if (existingAssets) {
+          return res.status(409).send({ message: "Asset Already Assigned" });
+        }
+
+        // Check if employee already exists in the company (team)
+        const existingEmployeeAffiliation =
+          await employeeAffiliationsCollection.findOne({
+            employeeEmail,
+            hrEmail,
+          });
+
+        // Get HR info
+        const hr = await usersCollection.findOne({ email: hrEmail });
+
+        if (!hr) {
+          return res.status(404).send({ message: "HR not found" });
+        }
+
+        const updatePackageLimit = hr.packageLimit - 1;
+
+        // Only increment currentEmployees if this is a NEW employee for the HR
+        let updateCurrentEmployees = hr.currentEmployees;
+        if (!existingEmployeeAffiliation) {
+          updateCurrentEmployees = hr.currentEmployees + 1;
+        }
+
+        // Update HR package limit and employee count
+        const updateHR = {
+          $set: {
+            packageLimit: updatePackageLimit,
+            currentEmployees: updateCurrentEmployees,
+          },
+        };
+
+        await usersCollection.updateOne({ email: hrEmail }, updateHR);
         const result = await assignedAssetsCollection.insertOne(assignmentData);
+
+        // Only add to employee affiliations if this is a NEW employee
+        if (!existingEmployeeAffiliation) {
+          const employeeAffiliationData = {
+            employeeName: assignmentData.employeeName,
+            employeeEmail: employeeEmail,
+            companyName: assignmentData.companyName,
+            companyLogo: hr?.companyLogo,
+            hrEmail: hrEmail,
+            affiliationDate: new Date().toISOString(),
+            status: "active",
+          };
+          await employeeAffiliationsCollection.insertOne(
+            employeeAffiliationData
+          );
+        }
+
         res.status(201).send(result);
       } catch (error) {
         console.error(error);
@@ -385,27 +573,46 @@ async function run() {
           return res.status(409).send({ message: "Already Assigned" });
         }
 
-        await assetsCollection.updateOne(assetQuery, assetUpdate);
-        await assignedAssetsCollection.insertOne(assignedAssetListData);
-        const result = await requestsCollection.updateOne(query, update);
-
-        res.send(result);
-
         const existingEmployeeAffiliation =
           await employeeAffiliationsCollection.findOne({
             employeeEmail: request?.requesterEmail,
             hrEmail: request?.hrEmail,
           });
 
-        if (existingEmployeeAffiliation) {
-          return res
-            .status(409)
-            .send({ message: "Already Assigned by This HR" });
+        const updatePackageLimit = hr.packageLimit - 1;
+
+        // Only increment currentEmployees if this is a NEW employee for the HR
+        let updateCurrentEmployees = hr.currentEmployees;
+        if (!existingEmployeeAffiliation) {
+          updateCurrentEmployees = hr.currentEmployees + 1;
         }
 
-        await employeeAffiliationsCollection.insertOne(
-          employeeAffiliationsListData
-        );
+        const updateHR = {
+          $set: {
+            packageLimit: updatePackageLimit,
+            currentEmployees: updateCurrentEmployees,
+          },
+        };
+
+        if (hr.packageLimit === 0) {
+          return res.status(409).send({
+            message:
+              "Your Package has been Finished, Buy Package for Approve Assignment",
+          });
+        }
+
+        await usersCollection.updateOne({ email: hr?.email }, updateHR);
+        await assetsCollection.updateOne(assetQuery, assetUpdate);
+        await assignedAssetsCollection.insertOne(assignedAssetListData);
+        const result = await requestsCollection.updateOne(query, update);
+
+        if (!existingEmployeeAffiliation) {
+          await employeeAffiliationsCollection.insertOne(
+            employeeAffiliationsListData
+          );
+        }
+
+        res.send(result);
       } catch (error) {
         res.status(500).send({ message: "Internal Server Error" });
       }
@@ -510,7 +717,7 @@ async function run() {
       }
     });
 
-    // Get members of a company
+    // Get employees of a company
     app.get("/my-team/:companyName", async (req, res) => {
       try {
         const { companyName } = req.params;
