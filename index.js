@@ -117,6 +117,18 @@ async function run() {
       }
     });
 
+    // get a user
+    app.get("/users/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+        const result = await usersCollection.findOne({ email });
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
     // get users role
     app.get("/user/role", verifyJWT, async (req, res) => {
       try {
@@ -252,6 +264,21 @@ async function run() {
       } catch (error) {
         console.error(error);
         res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // Get payment history
+    app.get("/payments/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+
+        const result = await paymentsCollection
+          .find({ hrEmail: email })
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.send({ message: "Internal Server Error" });
       }
     });
 
