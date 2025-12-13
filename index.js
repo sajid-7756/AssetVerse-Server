@@ -21,7 +21,7 @@ app.use(
       process.env.CLIENT_DOMAIN || "http://localhost:5173",
       "http://localhost:5173",
       "http://localhost:5174",
-      "https://b12-m11-session.web.app",
+      "https://assetverse-e610c.web.app",
     ],
     credentials: true,
     optionSuccessStatus: 200,
