@@ -517,6 +517,7 @@ async function run() {
     app.get("/asset-requests/:email", async (req, res) => {
       try {
         const { email } = req.params;
+        const { limit = 0, skip = 0 } = req.query;
 
         const query = {};
 
@@ -524,8 +525,17 @@ async function run() {
           query.hrEmail = email;
         }
 
-        const result = await requestsCollection.find(query).toArray();
-        res.send(result);
+        const result = await requestsCollection
+          .find(query)
+          .limit(Number(limit))
+          .skip(Number(skip))
+          .toArray();
+
+        const count = await requestsCollection.countDocuments({
+          hrEmail: email,
+        });
+
+        res.send({ requests: result, total: count });
       } catch (error) {
         console.error(error);
         res.status(500).send({ message: "Internal Server Error" });
