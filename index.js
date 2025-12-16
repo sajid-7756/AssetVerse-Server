@@ -70,7 +70,7 @@ async function run() {
       try {
         const email = req.tokenEmail;
         const user = await usersCollection.findOne({ email });
-        if (!user || user.role === "employee") {
+        if (!user || user.role !== "employee") {
           return res.status(403).send({ message: "Only employee actions" });
         }
         next();
@@ -84,7 +84,7 @@ async function run() {
       try {
         const email = req.tokenEmail;
         const user = await usersCollection.findOne({ email });
-        if (!user || user.role === "hr") {
+        if (!user || user.role !== "hr") {
           return res.status(403).send({ message: "Only HR actions" });
         }
         next();
@@ -118,10 +118,9 @@ async function run() {
     });
 
     // get a user
-    app.get("/users/:email", async (req, res) => {
+    app.get("/users", verifyJWT, async (req, res) => {
       try {
-        const { email } = req.params;
-        const result = await usersCollection.findOne({ email });
+        const result = await usersCollection.findOne({ email: req.tokenEmail });
         res.send(result);
       } catch (error) {
         console.error(error);
@@ -161,7 +160,7 @@ async function run() {
     // Package related APIs
 
     // Get all packages
-    app.get("/packages", async (req, res) => {
+    app.get("/packages", verifyJWT, verifyHR, async (req, res) => {
       try {
         const result = await packagesCollection.find().toArray();
         res.send(result);
@@ -173,42 +172,43 @@ async function run() {
 
     // Payment Endpoints
 
-    app.post("/create-checkout-session", async (req, res) => {
-      // try {
-      const paymentInfo = req.body;
-      console.log(paymentInfo);
-      const session = await stripe.checkout.sessions.create({
-        line_items: [
-          {
-            price_data: {
-              currency: "usd",
-              product_data: {
-                name: paymentInfo?.name,
+    app.post(
+      "/create-checkout-session",
+      verifyJWT,
+      verifyHR,
+      async (req, res) => {
+        // try {
+        const paymentInfo = req.body;
+
+        const session = await stripe.checkout.sessions.create({
+          line_items: [
+            {
+              price_data: {
+                currency: "usd",
+                product_data: {
+                  name: paymentInfo?.name,
+                },
+                unit_amount: paymentInfo?.price * 100,
               },
-              unit_amount: paymentInfo?.price * 100,
+              quantity: 1,
             },
-            quantity: 1,
+          ],
+          customer_email: paymentInfo?.customer?.email,
+          mode: "payment",
+          metadata: {
+            packageId: paymentInfo?.packageId,
+            customer: paymentInfo?.customer?.name,
+            employeeLimit: paymentInfo?.employeeLimit,
           },
-        ],
-        customer_email: paymentInfo?.customer?.email,
-        mode: "payment",
-        metadata: {
-          packageId: paymentInfo?.packageId,
-          customer: paymentInfo?.customer?.name,
-          employeeLimit: paymentInfo?.employeeLimit,
-        },
-        success_url: `${process.env.CLIENT_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${process.env.CLIENT_DOMAIN}/dashboard/upgrade-package`,
-      });
+          success_url: `${process.env.CLIENT_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${process.env.CLIENT_DOMAIN}/dashboard/upgrade-package`,
+        });
 
-      res.send({ url: session.url });
-      // } catch (error) {
-      //   console.error(error);
-      //   res.status(500).send({ message: "Internal Server Error" });
-      // }
-    });
+        res.send({ url: session.url });
+      }
+    );
 
-    app.post("/payment-success", async (req, res) => {
+    app.post("/payment-success", verifyJWT, verifyHR, async (req, res) => {
       try {
         const { sessionId } = req.body;
         const session = await stripe.checkout.sessions.retrieve(sessionId);
@@ -268,7 +268,7 @@ async function run() {
     });
 
     // Get payment history
-    app.get("/payments/:email", async (req, res) => {
+    app.get("/payments/:email", verifyJWT, verifyHR, async (req, res) => {
       try {
         const { email } = req.params;
 
@@ -285,7 +285,7 @@ async function run() {
     // Asset Related APIs
 
     // Get all assets
-    app.get("/assets", async (req, res) => {
+    app.get("/assets", verifyJWT, async (req, res) => {
       try {
         const result = await assetsCollection.find().toArray();
         res.send(result);
@@ -296,10 +296,10 @@ async function run() {
     });
 
     //get all assets of a company
-    app.get("/company-assets/:email", async (req, res) => {
+    app.get("/company-assets/:email", verifyJWT, verifyHR, async (req, res) => {
       try {
         const { email: hrEmail } = req.params;
-        const result = await assetsCollection.find({ hrEmail }).toArray();
+        const result = await assetsCollection.find({ hrEmail }).sort({}).toArray();
         res.send(result);
       } catch (error) {
         console.error(error);
@@ -308,25 +308,30 @@ async function run() {
     });
 
     // Get a employees assets
-    app.get("/my-assets/:email", async (req, res) => {
-      try {
-        const { email } = req.params;
+    app.get(
+      "/my-assets/:email",
+      verifyJWT,
+      verifyEmployee,
+      async (req, res) => {
+        try {
+          const { email } = req.tokenEmail;
 
-        const query = {};
-        if (email) {
-          query.employeeEmail = email;
+          const query = {};
+          if (email) {
+            query.employeeEmail = email;
+          }
+
+          const result = await assignedAssetsCollection.find(query).toArray();
+          res.send(result);
+        } catch (error) {
+          console.error(error);
+          res.status(500).send({ message: "Internal Server Error" });
         }
-
-        const result = await assignedAssetsCollection.find(query).toArray();
-        res.send(result);
-      } catch (error) {
-        console.error(error);
-        res.status(500).send({ message: "Internal Server Error" });
       }
-    });
+    );
 
     // Edit asset
-    app.patch("/assets/:id", async (req, res) => {
+    app.patch("/assets/:id", verifyJWT, verifyHR, async (req, res) => {
       try {
         const updateData = req.body;
         const { id } = req.params;
@@ -353,7 +358,7 @@ async function run() {
     });
 
     // assign asset
-    app.patch("/assign-asset/:id", async (req, res) => {
+    app.patch("/assign-asset/:id", verifyJWT, verifyHR, async (req, res) => {
       try {
         const updateData = req.body;
         const { id } = req.params;
@@ -364,7 +369,6 @@ async function run() {
         };
 
         const asset = await assetsCollection.findOne({ _id: new ObjectId(id) });
-        console.log(asset);
 
         if (asset.availableQuantity === 0) {
           return res.status(404).send({ message: "Asset Not Available" });
@@ -384,7 +388,7 @@ async function run() {
     });
 
     // Post asset
-    app.post("/assets", async (req, res) => {
+    app.post("/assets", verifyJWT, verifyHR, async (req, res) => {
       try {
         const assetData = req.body;
         const result = await assetsCollection.insertOne(assetData);
@@ -396,7 +400,7 @@ async function run() {
     });
 
     // Delete asset
-    app.delete("/asset/:id", async (req, res) => {
+    app.delete("/asset/:id", verifyJWT, verifyHR, async (req, res) => {
       try {
         const { id } = req.params;
         const query = { _id: new ObjectId(id) };
@@ -416,7 +420,7 @@ async function run() {
     // Request Related APIs
 
     // Post assigned asset (direct assignment from HR)
-    app.post("/assigned-assets", async (req, res) => {
+    app.post("/assigned-assets", verifyJWT, verifyHR, async (req, res) => {
       try {
         const assignmentData = req.body;
         const employeeEmail = assignmentData.employeeEmail;
@@ -441,6 +445,13 @@ async function run() {
 
         // Get HR info
         const hr = await usersCollection.findOne({ email: hrEmail });
+
+        if (hr.packageLimit === 0) {
+          return res.status(409).send({
+            message:
+              "Your package limit has been reached. Please upgrade or purchase a new package to continue.",
+          });
+        }
 
         if (!hr) {
           return res.status(404).send({ message: "HR not found" });
@@ -489,7 +500,7 @@ async function run() {
     });
 
     // Post asset request
-    app.post("/asset-requests", async (req, res) => {
+    app.post("/asset-requests", verifyJWT, verifyEmployee, async (req, res) => {
       try {
         const requestData = req.body;
         requestData.requestDate = new Date().toISOString();
@@ -498,7 +509,7 @@ async function run() {
 
         const existingRequest = await requestsCollection.findOne({
           assetId: requestData.assetId,
-          requesterEmail: requestData.requesterEmail,
+          requesterEmail: req.tokenEmail,
         });
 
         if (existingRequest) {
@@ -514,7 +525,7 @@ async function run() {
     });
 
     // Get asset requests
-    app.get("/asset-requests/:email", async (req, res) => {
+    app.get("/asset-requests/:email", verifyJWT, verifyHR, async (req, res) => {
       try {
         const { email } = req.params;
         const { limit = 0, skip = 0 } = req.query;
@@ -527,6 +538,7 @@ async function run() {
 
         const result = await requestsCollection
           .find(query)
+          .sort({ requestDate: -1 })
           .limit(Number(limit))
           .skip(Number(skip))
           .toArray();
@@ -543,163 +555,173 @@ async function run() {
     });
 
     // Approve employee request
-    app.patch("/approve-employee-requests/:id", async (req, res) => {
-      try {
-        const { requestStatus, assetId } = req.body;
-        const { id } = req.params;
-        const query = { _id: new ObjectId(id) };
-        const assetQuery = {
-          _id: new ObjectId(assetId),
-        };
+    app.patch(
+      "/approve-employee-requests/:id",
+      verifyJWT,
+      verifyHR,
+      async (req, res) => {
+        try {
+          const { requestStatus, assetId } = req.body;
+          const { id } = req.params;
+          const query = { _id: new ObjectId(id) };
+          const assetQuery = {
+            _id: new ObjectId(assetId),
+          };
 
-        const update = {
-          $set: { requestStatus, approvalDate: new Date().toISOString() },
-        };
+          const update = {
+            $set: { requestStatus, approvalDate: new Date().toISOString() },
+          };
 
-        const asset = await assetsCollection.findOne(assetQuery);
+          const asset = await assetsCollection.findOne(assetQuery);
 
-        const latestQuantity = asset.availableQuantity - 1;
+          const latestQuantity = asset.availableQuantity - 1;
 
-        const assetUpdate = {
-          $set: { availableQuantity: latestQuantity },
-        };
+          const assetUpdate = {
+            $set: { availableQuantity: latestQuantity },
+          };
 
-        const request = await requestsCollection.findOne(query);
+          const request = await requestsCollection.findOne(query);
 
-        const assignedAssetListData = {
-          assetId: asset?._id.toString(),
-          assetName: asset?.productName,
-          assetImage: asset?.productImage,
-          assetType: asset?.productType,
-          employeeEmail: request?.requesterEmail,
-          employeeName: request?.requesterName,
-          hrEmail: request?.hrEmail,
-          companyName: request?.companyName,
-          assignmentDate: new Date().toISOString(),
-          returnDate: null,
-          status: "assigned",
-        };
-
-        const hr = await usersCollection.findOne({ email: request?.hrEmail });
-
-        const employeeAffiliationsListData = {
-          employeeName: request?.requesterName,
-          employeeEmail: request?.requesterEmail,
-          companyName: request?.companyName,
-          companyLogo: hr?.companyLogo,
-          hrEmail: request?.hrEmail,
-          affiliationDate: new Date().toISOString(),
-          status: "active",
-        };
-
-        if (!request) {
-          return res.status(404).send({ message: "Request Not Found" });
-        }
-        if (request.requestStatus === "approved") {
-          return res.status(409).send({ message: "Request Already Approved" });
-        }
-
-        const existingAssignedAssetCollection =
-          await assignedAssetsCollection.findOne({
+          const assignedAssetListData = {
             assetId: asset?._id.toString(),
+            assetName: asset?.productName,
+            assetImage: asset?.productImage,
+            assetType: asset?.productType,
             employeeEmail: request?.requesterEmail,
-            status: "assigned",
-          });
-
-        if (existingAssignedAssetCollection) {
-          return res.status(409).send({ message: "Already Assigned" });
-        }
-
-        const existingEmployeeAffiliation =
-          await employeeAffiliationsCollection.findOne({
-            employeeEmail: request?.requesterEmail,
+            employeeName: request?.requesterName,
             hrEmail: request?.hrEmail,
-          });
+            companyName: request?.companyName,
+            assignmentDate: new Date().toISOString(),
+            returnDate: null,
+            status: "assigned",
+          };
 
-        const updatePackageLimit = hr.packageLimit - 1;
+          const hr = await usersCollection.findOne({ email: request?.hrEmail });
 
-        // Only increment currentEmployees if this is a NEW employee for the HR
-        let updateCurrentEmployees = hr.currentEmployees;
-        if (!existingEmployeeAffiliation) {
-          updateCurrentEmployees = hr.currentEmployees + 1;
+          const employeeAffiliationsListData = {
+            employeeName: request?.requesterName,
+            employeeEmail: request?.requesterEmail,
+            companyName: request?.companyName,
+            companyLogo: hr?.companyLogo,
+            hrEmail: request?.hrEmail,
+            affiliationDate: new Date().toISOString(),
+            status: "active",
+          };
+
+          if (!request) {
+            return res.status(404).send({ message: "Request Not Found" });
+          }
+          if (request.requestStatus === "approved") {
+            return res
+              .status(409)
+              .send({ message: "Request Already Approved" });
+          }
+
+          const existingAssignedAssetCollection =
+            await assignedAssetsCollection.findOne({
+              assetId: asset?._id.toString(),
+              employeeEmail: request?.requesterEmail,
+              status: "assigned",
+            });
+
+          if (existingAssignedAssetCollection) {
+            return res.status(409).send({ message: "Already Assigned" });
+          }
+
+          const existingEmployeeAffiliation =
+            await employeeAffiliationsCollection.findOne({
+              employeeEmail: request?.requesterEmail,
+              hrEmail: request?.hrEmail,
+            });
+
+          const updatePackageLimit = hr.packageLimit - 1;
+
+          // Only increment currentEmployees if this is a NEW employee for the HR
+          let updateCurrentEmployees = hr.currentEmployees;
+          if (!existingEmployeeAffiliation) {
+            updateCurrentEmployees = hr.currentEmployees + 1;
+          }
+
+          const updateHR = {
+            $set: {
+              packageLimit: updatePackageLimit,
+              currentEmployees: updateCurrentEmployees,
+            },
+          };
+
+          if (hr.packageLimit === 0) {
+            return res.status(409).send({
+              message:
+                "Your Package has been Finished, Buy Package for Approve Assignment",
+            });
+          }
+
+          await usersCollection.updateOne({ email: hr?.email }, updateHR);
+          await assetsCollection.updateOne(assetQuery, assetUpdate);
+          await assignedAssetsCollection.insertOne(assignedAssetListData);
+          const result = await requestsCollection.updateOne(query, update);
+
+          if (!existingEmployeeAffiliation) {
+            await employeeAffiliationsCollection.insertOne(
+              employeeAffiliationsListData
+            );
+          }
+
+          res.send(result);
+        } catch (error) {
+          res.status(500).send({ message: "Internal Server Error" });
         }
-
-        const updateHR = {
-          $set: {
-            packageLimit: updatePackageLimit,
-            currentEmployees: updateCurrentEmployees,
-          },
-        };
-
-        if (hr.packageLimit === 0) {
-          return res.status(409).send({
-            message:
-              "Your Package has been Finished, Buy Package for Approve Assignment",
-          });
-        }
-
-        await usersCollection.updateOne({ email: hr?.email }, updateHR);
-        await assetsCollection.updateOne(assetQuery, assetUpdate);
-        await assignedAssetsCollection.insertOne(assignedAssetListData);
-        const result = await requestsCollection.updateOne(query, update);
-
-        if (!existingEmployeeAffiliation) {
-          await employeeAffiliationsCollection.insertOne(
-            employeeAffiliationsListData
-          );
-        }
-
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: "Internal Server Error" });
       }
-    });
+    );
 
     // Reject employee request
-    app.patch("/reject-employee-requests/:id", async (req, res) => {
-      try {
-        const { requestStatus } = req.body;
-        const { id } = req.params;
-        const query = { _id: new ObjectId(id) };
+    app.patch(
+      "/reject-employee-requests/:id",
+      verifyJWT,
+      verifyHR,
+      async (req, res) => {
+        try {
+          const { requestStatus } = req.body;
+          const { id } = req.params;
+          const query = { _id: new ObjectId(id) };
 
-        const update = {
-          $set: {
-            requestStatus,
-          },
-        };
+          const update = {
+            $set: {
+              requestStatus,
+            },
+          };
 
-        const existingRequest = await requestsCollection.findOne(query);
+          const existingRequest = await requestsCollection.findOne(query);
 
-        if (!existingRequest) {
-          return res.status(404).send({ message: "Request Not Found" });
+          if (!existingRequest) {
+            return res.status(404).send({ message: "Request Not Found" });
+          }
+
+          if (existingRequest.requestStatus !== "pending") {
+            return res.status(409).send({ message: "Already Processed" });
+          }
+
+          const result = await requestsCollection.updateOne(query, update);
+          res.send(result);
+        } catch (error) {
+          console.error(error);
+          res.status(500).send({ message: "Internal Server Error" });
         }
-
-        if (existingRequest.requestStatus !== "pending") {
-          return res.status(409).send({ message: "Already Processed" });
-        }
-
-        const result = await requestsCollection.updateOne(query, update);
-        res.send(result);
-      } catch (error) {
-        console.error(error);
-        res.status(500).send({ message: "Internal Server Error" });
       }
-    });
+    );
 
     // Employee Related Data
 
     // Get a HRs employee
-    app.get("/my-employees/:email", async (req, res) => {
+    app.get("/my-employees/:email", verifyJWT, verifyHR, async (req, res) => {
       try {
-        const { email: hrEmail } = req.params;
-
         // 1 Get all asset assignments for this HR
         const employeeAffiliations = await employeeAffiliationsCollection
-          .find({ hrEmail })
+          .find({ hrEmail: req.tokenEmail })
           .toArray();
 
         const assignedAssets = await assignedAssetsCollection
-          .find({ hrEmail })
+          .find({ hrEmail: req.tokenEmail })
           .toArray();
 
         // 2 Get unique employee emails
@@ -740,90 +762,105 @@ async function run() {
     });
 
     // Delete an employee
-    app.delete("/my-employees/:email", async (req, res) => {
-      try {
-        const { email: employeeEmail } = req.params;
-        const result = await employeeAffiliationsCollection.deleteOne({
-          employeeEmail,
-        });
+    app.delete(
+      "/my-employees/:email",
+      verifyJWT,
+      verifyHR,
+      async (req, res) => {
+        try {
+          const { email: employeeEmail } = req.params;
+          const result = await employeeAffiliationsCollection.deleteOne({
+            employeeEmail,
+          });
 
-        res.send(result);
-      } catch (error) {
-        console.error(error);
-        res.status(500).send({ message: "Internal Server Error" });
+          res.send(result);
+        } catch (error) {
+          console.error(error);
+          res.status(500).send({ message: "Internal Server Error" });
+        }
       }
-    });
+    );
 
     // Get employees of a company
-    app.get("/my-team/:companyName", async (req, res) => {
-      try {
-        const { companyName } = req.params;
+    app.get(
+      "/my-team/:companyName",
+      verifyJWT,
+      verifyEmployee,
+      async (req, res) => {
+        try {
+          const { companyName } = req.params;
 
-        //1 Get employeeAffiliations by company Name
-        const employeeAffiliations = await employeeAffiliationsCollection
-          .find({ companyName })
-          .toArray();
+          //1 Get employeeAffiliations by company Name
+          const employeeAffiliations = await employeeAffiliationsCollection
+            .find({ companyName })
+            .toArray();
 
-        // 2 Get the employees email
-        const employeeEmails = [
-          ...new Set(employeeAffiliations.map((e) => e.employeeEmail)),
-        ];
+          // 2 Get the employees email
+          const employeeEmails = [
+            ...new Set(employeeAffiliations.map((e) => e.employeeEmail)),
+          ];
 
-        if (employeeEmails.length === 0) {
-          return res.send([]);
+          if (employeeEmails.length === 0) {
+            return res.send([]);
+          }
+
+          // 3 Get HRs email
+          const hrRecord = await employeeAffiliationsCollection.findOne({
+            companyName,
+          });
+
+          const hrEmail = hrRecord?.hrEmail;
+
+          const memberQuery = {
+            $or: [{ email: { $in: employeeEmails } }, { email: hrEmail }],
+          };
+
+          // 4 Get members data from usersCollection
+          const members = await usersCollection.find(memberQuery).toArray();
+
+          const result = members.map((e) => {
+            return {
+              name: e.name,
+              email: e.email,
+              photo: e.profileImage,
+              position: e.role,
+              upcomingBirthday: e.dateOfBirth,
+            };
+          });
+          res.send(result);
+        } catch (error) {
+          console.error(error);
+          res.status(500).send({ message: "Internal Server Error" });
         }
-
-        // 3 Get HRs email
-        const hrRecord = await employeeAffiliationsCollection.findOne({
-          companyName,
-        });
-
-        const hrEmail = hrRecord?.hrEmail;
-
-        const memberQuery = {
-          $or: [{ email: { $in: employeeEmails } }, { email: hrEmail }],
-        };
-
-        // 4 Get members data from usersCollection
-        const members = await usersCollection.find(memberQuery).toArray();
-
-        const result = members.map((e) => {
-          return {
-            name: e.name,
-            email: e.email,
-            photo: e.profileImage,
-            position: e.role,
-            upcomingBirthday: e.dateOfBirth,
-          };
-        });
-        res.send(result);
-      } catch (error) {
-        console.error(error);
-        res.status(500).send({ message: "Internal Server Error" });
       }
-    });
+    );
 
-    // Get a members companies
-    app.get("/my-companies/:email", async (req, res) => {
-      try {
-        const { email: employeeEmail } = req.params;
+    // Get a member of a company
+    app.get(
+      "/my-companies/:email",
+      verifyJWT,
+      verifyEmployee,
+      async (req, res) => {
+        try {
+          const { email: employeeEmail } = req.params;
 
-        const myCompanies = await employeeAffiliationsCollection
-          .find({ employeeEmail })
-          .toArray();
+          const myCompanies = await employeeAffiliationsCollection
+            .find({ employeeEmail })
+            .toArray();
 
-        const result = myCompanies.map((company) => {
-          return {
-            companyName: company.companyName,
-          };
-        });
+          const result = myCompanies.map((company) => {
+            return {
+              companyName: company.companyName,
+            };
+          });
 
-        res.send(result);
-      } catch (error) {
-        console.error(error);
-        res.status(500).send({ message: "Internal Server Error" });
+          res.send(result);
+        } catch (error) {
+          console.error(error);
+          res.status(500).send({ message: "Internal Server Error" });
+        }
       }
-    });
+    );
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
