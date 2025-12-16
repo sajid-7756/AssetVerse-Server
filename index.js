@@ -342,7 +342,6 @@ async function run() {
         };
 
         const asset = await assetsCollection.findOne({ _id: new ObjectId(id) });
-        console.log(asset);
 
         const result = await assetsCollection.updateOne(query, update);
 
