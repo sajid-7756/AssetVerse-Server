@@ -6,7 +6,7 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const admin = require("firebase-admin");
 const port = process.env.PORT || 3000;
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
-  "utf-8"
+  "utf-8",
 );
 const serviceAccount = JSON.parse(decoded);
 admin.initializeApp({
@@ -25,7 +25,7 @@ app.use(
     ],
     credentials: true,
     optionSuccessStatus: 200,
-  })
+  }),
 );
 app.use(express.json());
 
@@ -57,13 +57,14 @@ async function run() {
     const db = client.db("Asset_Verse");
     const usersCollection = db.collection("users");
     const employeeAffiliationsCollection = db.collection(
-      "employeeAffiliations"
+      "employeeAffiliations",
     );
     const assetsCollection = db.collection("assets");
     const requestsCollection = db.collection("requests");
     const assignedAssetsCollection = db.collection("assignedAssets");
     const packagesCollection = db.collection("packages");
     const paymentsCollection = db.collection("payments");
+    const blogsCollection = db.collection("blogs");
 
     // role based middleware
     const verifyEmployee = async (req, res, next) => {
@@ -93,6 +94,29 @@ async function run() {
         res.status(500).send({ message: "Internal Server Error" });
       }
     };
+
+    // Blogs related APIs
+    app.get("/blogs", async (req, res) => {
+      try {
+        const result = await blogsCollection.find().toArray();
+        res.status(200).send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Internal Server Error" });
+      }
+    });
+
+    // Get a single blog
+    app.get("/blogs/:id", async (req, res) => {
+      try {
+        const { id} = req.params;
+        const result = await blogsCollection.findOne({ _id: new ObjectId(id) });
+        res.status(200).send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
 
     //User related APIs
     // post new users
@@ -148,7 +172,7 @@ async function run() {
 
         const result = await usersCollection.updateOne(
           { email },
-          { $set: { name } }
+          { $set: { name } },
         );
         res.send(result);
       } catch (error) {
@@ -205,7 +229,7 @@ async function run() {
         });
 
         res.send({ url: session.url });
-      }
+      },
     );
 
     app.post("/payment-success", verifyJWT, verifyHR, async (req, res) => {
@@ -299,7 +323,10 @@ async function run() {
     app.get("/company-assets/:email", verifyJWT, verifyHR, async (req, res) => {
       try {
         const { email: hrEmail } = req.params;
-        const result = await assetsCollection.find({ hrEmail }).sort({}).toArray();
+        const result = await assetsCollection
+          .find({ hrEmail })
+          .sort({})
+          .toArray();
         res.send(result);
       } catch (error) {
         console.error(error);
@@ -327,7 +354,7 @@ async function run() {
           console.error(error);
           res.status(500).send({ message: "Internal Server Error" });
         }
-      }
+      },
     );
 
     // Edit asset
@@ -487,7 +514,7 @@ async function run() {
             status: "active",
           };
           await employeeAffiliationsCollection.insertOne(
-            employeeAffiliationData
+            employeeAffiliationData,
           );
         }
 
@@ -662,7 +689,7 @@ async function run() {
 
           if (!existingEmployeeAffiliation) {
             await employeeAffiliationsCollection.insertOne(
-              employeeAffiliationsListData
+              employeeAffiliationsListData,
             );
           }
 
@@ -670,7 +697,7 @@ async function run() {
         } catch (error) {
           res.status(500).send({ message: "Internal Server Error" });
         }
-      }
+      },
     );
 
     // Reject employee request
@@ -706,7 +733,7 @@ async function run() {
           console.error(error);
           res.status(500).send({ message: "Internal Server Error" });
         }
-      }
+      },
     );
 
     // Employee Related Data
@@ -742,7 +769,7 @@ async function run() {
         // 4 Count assets for each employee
         const result = employees.map((emp) => {
           const assetCount = assignedAssets.filter(
-            (a) => a.employeeEmail === emp.email
+            (a) => a.employeeEmail === emp.email,
           ).length;
 
           return {
@@ -777,7 +804,7 @@ async function run() {
           console.error(error);
           res.status(500).send({ message: "Internal Server Error" });
         }
-      }
+      },
     );
 
     // Get employees of a company
@@ -831,7 +858,7 @@ async function run() {
           console.error(error);
           res.status(500).send({ message: "Internal Server Error" });
         }
-      }
+      },
     );
 
     // Get a member of a company
@@ -858,13 +885,13 @@ async function run() {
           console.error(error);
           res.status(500).send({ message: "Internal Server Error" });
         }
-      }
+      },
     );
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
+      "Pinged your deployment. You successfully connected to MongoDB!",
     );
   } finally {
     // Ensures that the client will close when you finish/error
